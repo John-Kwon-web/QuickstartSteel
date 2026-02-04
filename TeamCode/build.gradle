@@ -25,4 +25,5 @@ android {
 
 dependencies {
     implementation project(':FtcRobotController')
+    implementation 'androidx.webgpu:webgpu:1.0.0-alpha03'
 }

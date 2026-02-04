@@ -1,0 +1,498 @@
+package org.firstinspires.ftc.teamcode;
+
+import com.pedropathing.follower.Follower;
+import com.pedropathing.geometry.BezierLine;
+import com.pedropathing.geometry.BezierCurve;
+import com.pedropathing.geometry.Pose;
+import com.pedropathing.paths.PathChain;
+import com.pedropathing.util.Timer;
+
+import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+
+import com.qualcomm.robotcore.hardware.*;
+import com.qualcomm.robotcore.util.ElapsedTime;
+
+import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+
+// ✅ PedroPathing 2.0 Constants
+import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
+
+@Autonomous(name = "Red Auto PP2 FULL", group = "Main")
+public class RedAuto_PP2_FULL extends OpMode {
+
+    /* ================= PEDRO ================= */
+    private Follower follower;
+    private Timer pathTimer;
+    private int pathState;
+
+    /* ================= POSES ================= */
+    private final Pose startPose = new Pose(111, 135, Math.toRadians(0));
+    private final Pose shootPose = new Pose(105.33, 108.4, Math.toRadians(42));
+
+    private final Pose intakeRowOnePose = new Pose(95, 93, Math.toRadians(180));
+    private final Pose intakePickupOnePose = new Pose(125, 93, Math.toRadians(180));
+
+    private final Pose intakeRowTwoPose = new Pose(100, 70, Math.toRadians(180));
+    private final Pose intakePickupTwoPose = new Pose(131, 67, Math.toRadians(180));
+
+    private final Pose leavePose = new Pose(96, 126.5, Math.toRadians(0));
+
+    /* ================= PATHS ================= */
+    private PathChain moveOne, moveTwo, moveThree, moveFour;
+    private PathChain moveFive, moveSix, moveSeven, moveLeave;
+
+    /* ================= HARDWARE ================= */
+    private DcMotorEx intake, shooter;
+    private CRServo crLeft, crRight;
+    private Servo spinServo, kickServo, adjustServo;
+    private DistanceSensor distanceSensor;
+
+    /* ================= PWM (REQUIRED) ================= */
+    public static int PWM_MIN = 800;
+    public static int PWM_MAX = 2200;
+
+    /* ================= INTAKE ================= */
+    public static double INTAKE_POWER = 0.8;
+    public static double CR_INTAKE_POWER = 1.0;
+    public static double DISTANCE_CM = 2.0;
+
+    public static double INTAKE_0 = 0.145;
+    public static double INTAKE_1 = 0.41;
+    public static double INTAKE_2 = 0.7;
+
+    private int ballCount = 0;
+    private boolean lastDetected = false;
+    private final ElapsedTime detectTimer = new ElapsedTime();
+
+    /* ================= SHOOTER ================= */
+    public static double TICKS_PER_REV = 28.0;
+    public static double RPM = 2350;
+    public static double RPM_TOL = 75;
+    public static double HOOD_POS = 0.75;
+
+    public static double SHOOT_A = 0.56;
+    public static double SHOOT_B = 0.28;
+    public static double SHOOT_C = 0.00;
+
+    /* ================= CR SHOOT ================= */
+    public static double CR_L = 1.0;
+    public static double CR_R = -1.0;
+
+    /* ================= KICKER ================= */
+    public static double KICK_IDLE = 1.0;
+    public static double KICK_ACTIVE = 0.7;
+    public static double SETTLE_SEC = 0.35;
+    public static double KICK_MS = 500;
+    public static double POST_MS = 500;
+
+    /* ================= STATE ================= */
+    private enum Mode { IDLE, SHOOT }
+    private Mode mode = Mode.IDLE;
+
+    private enum ShootState {
+        A, A_SETTLE, A_KICK, A_POST,
+        B, B_SETTLE, B_KICK, B_POST,
+        C, C_SETTLE, C_KICK, C_POST
+    }
+
+    private ShootState shootState = ShootState.A;
+    private final ElapsedTime shootTimer = new ElapsedTime();
+    private boolean prespin = false;
+
+    /* ================= BUILD PATHS ================= */
+    public void buildPaths() {
+
+        moveOne = follower.pathBuilder()
+                .addPath(new BezierLine(startPose, shootPose))
+                .setLinearHeadingInterpolation(startPose.getHeading(), shootPose.getHeading())
+                .build();
+
+        moveTwo = follower.pathBuilder()
+                .addPath(new BezierLine(shootPose, intakeRowOnePose))
+                .setLinearHeadingInterpolation(shootPose.getHeading(), intakeRowOnePose.getHeading())
+                .build();
+
+        moveThree = follower.pathBuilder()
+                .addPath(new BezierLine(intakeRowOnePose, intakePickupOnePose))
+                .setLinearHeadingInterpolation(intakeRowOnePose.getHeading(), intakePickupOnePose.getHeading())
+                .build();
+
+        moveFour = follower.pathBuilder()
+                .addPath(new BezierLine(intakePickupOnePose, shootPose))
+                .setLinearHeadingInterpolation(intakePickupOnePose.getHeading(), shootPose.getHeading())
+                .build();
+
+        moveFive = follower.pathBuilder()
+                .addPath(new BezierLine(shootPose, intakeRowTwoPose))
+                .setLinearHeadingInterpolation(shootPose.getHeading(), intakeRowTwoPose.getHeading())
+                .build();
+
+        moveSix = follower.pathBuilder()
+                .addPath(new BezierLine(intakeRowTwoPose, intakePickupTwoPose))
+                .setLinearHeadingInterpolation(intakeRowTwoPose.getHeading(), intakePickupTwoPose.getHeading())
+                .build();
+
+        Pose controlPose = new Pose(100.9, 58.9, 0);
+
+        moveSeven = follower.pathBuilder()
+                .addPath(new BezierCurve(intakePickupTwoPose, controlPose, shootPose))
+                .setLinearHeadingInterpolation(intakePickupTwoPose.getHeading(), shootPose.getHeading())
+                .build();
+
+        moveLeave = follower.pathBuilder()
+                .addPath(new BezierLine(shootPose, leavePose))
+                .setLinearHeadingInterpolation(shootPose.getHeading(), leavePose.getHeading())
+                .build();
+    }
+
+    /* ================= AUTO FSM ================= */
+    public void autonomousPathUpdate() {
+
+        switch (pathState) {
+
+            case 0:
+                prespin = true;
+                setShooterRPM(RPM);
+                adjustServo.setPosition(HOOD_POS);
+
+                follower.followPath(moveOne);
+                setPathState(1);
+                break;
+
+            case 1:
+                if (!follower.isBusy()) {
+                    prespin = false;
+                    startShoot(RPM, HOOD_POS);
+                    setPathState(2);
+                }
+                break;
+
+            case 2:
+                updateMechanisms();
+                if (mode == Mode.IDLE) {
+                    ballCount = 0;
+                    follower.followPath(moveTwo);
+                    setPathState(3);
+                }
+                break;
+
+            case 3:
+                if (!follower.isBusy()) {
+                    prespin = true;
+                    follower.setMaxPower(0.6);
+                    follower.followPath(moveThree);
+                    setPathState(4);
+                }
+                break;
+
+            case 4:
+                runIntake();
+                if (!follower.isBusy()) {
+                    follower.setMaxPower(1);
+                    stopIntake();
+                    follower.followPath(moveFour);
+                    setPathState(5);
+                }
+                break;
+
+            case 5:
+                if (!follower.isBusy()) {
+                    prespin = false;
+                    startShoot(RPM, HOOD_POS);
+                    setPathState(6);
+                }
+                break;
+
+            case 6:
+                updateMechanisms();
+                if (mode == Mode.IDLE) {
+                    ballCount = 0;
+                    follower.followPath(moveFive);
+                    setPathState(7);
+                }
+                break;
+
+            case 7:
+                if (!follower.isBusy()) {
+                    prespin = true;
+                    follower.setMaxPower(0.6);
+                    follower.followPath(moveSix);
+                    setPathState(8);
+                }
+                break;
+
+            case 8:
+                runIntake();
+                if (!follower.isBusy()) {
+                    follower.setMaxPower(1);
+                    stopIntake();
+                    follower.followPath(moveSeven);
+                    setPathState(9);
+                }
+                break;
+
+            case 9:
+                if (!follower.isBusy()) {
+                    prespin = false;
+                    startShoot(RPM, HOOD_POS);
+                    setPathState(10);
+                }
+                break;
+
+            case 10:
+                updateMechanisms();
+                if (mode == Mode.IDLE) {
+                    follower.followPath(moveLeave);
+                    setPathState(11);
+                }
+                break;
+
+            case 11:
+                if (!follower.isBusy()) {
+                    stopIntake();
+                    setCR(0, 0);
+                    setShooterRPM(0);
+
+                    spinServo.setPosition(INTAKE_0);
+                    kickServo.setPosition(KICK_IDLE);
+
+                    setPathState(-1);
+                }
+                break;
+        }
+    }
+
+    private void setPathState(int state) {
+        pathState = state;
+        pathTimer.resetTimer();
+    }
+
+    /* ================= INIT ================= */
+    @Override
+    public void init() {
+
+        pathTimer = new Timer();
+
+        // ✅ PP2 follower creation
+        follower = Constants.createFollower(hardwareMap);
+        follower.setStartingPose(startPose);
+
+        buildPaths();
+
+        intake = hardwareMap.get(DcMotorEx.class, "intake");
+
+        shooter = hardwareMap.get(DcMotorEx.class, "shooter");
+        shooter.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        shooter.setDirection(DcMotorSimple.Direction.REVERSE);
+
+        crLeft = hardwareMap.get(CRServo.class, "cr_left");
+        crRight = hardwareMap.get(CRServo.class, "cr_right");
+        crRight.setDirection(DcMotorSimple.Direction.REVERSE);
+
+        spinServo = hardwareMap.get(Servo.class, "spin");
+        kickServo = hardwareMap.get(Servo.class, "kick_servo");
+        adjustServo = hardwareMap.get(Servo.class, "adjust_servo");
+
+        // ✅ PWM RANGE (REQUIRED)
+        if (spinServo instanceof PwmControl) {
+            ((PwmControl) spinServo)
+                    .setPwmRange(new PwmControl.PwmRange(PWM_MIN, PWM_MAX));
+        }
+
+        if (adjustServo instanceof PwmControl) {
+            ((PwmControl) adjustServo)
+                    .setPwmRange(new PwmControl.PwmRange(PWM_MIN, PWM_MAX));
+        }
+
+        distanceSensor = hardwareMap.get(DistanceSensor.class, "sensor_color_left");
+
+        kickServo.setPosition(KICK_IDLE);
+        spinServo.setPosition(INTAKE_0);
+        adjustServo.setPosition(HOOD_POS);
+    }
+
+    @Override
+    public void start() {
+        setPathState(0);
+    }
+
+    @Override
+    public void loop() {
+
+        follower.update();
+        autonomousPathUpdate();
+
+        telemetry.addData("State", pathState);
+        telemetry.addData("Mode", mode);
+        telemetry.addData("RPM", getShooterRPM());
+        telemetry.addData("BallCount", ballCount);
+        telemetry.update();
+    }
+
+    /* ================= MECHANISMS ================= */
+
+    private void startShoot(double rpm, double hood) {
+        mode = Mode.SHOOT;
+        shootState = ShootState.A;
+        shootTimer.reset();
+        adjustServo.setPosition(hood);
+        setShooterRPM(rpm);
+    }
+
+    private void updateMechanisms() {
+        if (mode == Mode.SHOOT) runShoot();
+        else hold();
+    }
+
+    /* ================= INTAKE ================= */
+
+    private void runIntake() {
+
+        if (ballCount >= 3) {
+            stopIntake();
+            return;
+        }
+
+        intake.setPower(INTAKE_POWER);
+        setCR(CR_INTAKE_POWER, CR_INTAKE_POWER);
+
+        boolean detected = distanceSensor.getDistance(DistanceUnit.CM) <= DISTANCE_CM;
+
+        if (detected && !lastDetected && detectTimer.seconds() > 0.4) {
+            ballCount++;
+            detectTimer.reset();
+        }
+
+        lastDetected = detected;
+
+        spinServo.setPosition(
+                ballCount == 0 ? INTAKE_0 :
+                        ballCount == 1 ? INTAKE_1 : INTAKE_2
+        );
+    }
+
+    private void stopIntake() {
+        intake.setPower(0);
+        setCR(0, 0);
+    }
+
+    /* ================= SHOOT FSM ================= */
+
+    private void runShoot() {
+
+        switch (shootState) {
+
+            case A:
+                spinServo.setPosition(SHOOT_A);
+                setCR(CR_L, CR_R);
+                shootTimer.reset();
+                shootState = ShootState.A_SETTLE;
+                break;
+
+            case A_SETTLE:
+                if (shootTimer.seconds() >= SETTLE_SEC && shooterAtSpeed()) {
+                    kickServo.setPosition(KICK_ACTIVE);
+                    shootTimer.reset();
+                    shootState = ShootState.A_KICK;
+                }
+                break;
+
+            case A_KICK:
+                if (shootTimer.milliseconds() >= KICK_MS) {
+                    kickServo.setPosition(KICK_IDLE);
+                    shootTimer.reset();
+                    shootState = ShootState.A_POST;
+                }
+                break;
+
+            case A_POST:
+                if (shootTimer.milliseconds() >= POST_MS)
+                    shootState = ShootState.B;
+                break;
+
+            case B:
+                spinServo.setPosition(SHOOT_B);
+                shootTimer.reset();
+                shootState = ShootState.B_SETTLE;
+                break;
+
+            case B_SETTLE:
+                if (shootTimer.seconds() >= SETTLE_SEC && shooterAtSpeed()) {
+                    kickServo.setPosition(KICK_ACTIVE);
+                    shootTimer.reset();
+                    shootState = ShootState.B_KICK;
+                }
+                break;
+
+            case B_KICK:
+                if (shootTimer.milliseconds() >= KICK_MS) {
+                    kickServo.setPosition(KICK_IDLE);
+                    shootTimer.reset();
+                    shootState = ShootState.B_POST;
+                }
+                break;
+
+            case B_POST:
+                if (shootTimer.milliseconds() >= POST_MS)
+                    shootState = ShootState.C;
+                break;
+
+            case C:
+                spinServo.setPosition(SHOOT_C);
+                shootTimer.reset();
+                shootState = ShootState.C_SETTLE;
+                break;
+
+            case C_SETTLE:
+                if (shootTimer.seconds() >= SETTLE_SEC && shooterAtSpeed()) {
+                    kickServo.setPosition(KICK_ACTIVE);
+                    shootTimer.reset();
+                    shootState = ShootState.C_KICK;
+                }
+                break;
+
+            case C_KICK:
+                if (shootTimer.milliseconds() >= KICK_MS) {
+                    kickServo.setPosition(KICK_IDLE);
+                    shootTimer.reset();
+                    shootState = ShootState.C_POST;
+                }
+                break;
+
+            case C_POST:
+                if (shootTimer.milliseconds() >= POST_MS) {
+                    setCR(0, 0);
+                    setShooterRPM(0);
+                    spinServo.setPosition(INTAKE_0);
+                    mode = Mode.IDLE;
+                }
+                break;
+        }
+    }
+
+    private void hold() {
+        stopIntake();
+        if (!prespin) setShooterRPM(0);
+        kickServo.setPosition(KICK_IDLE);
+    }
+
+    /* ================= HELPERS ================= */
+
+    private void setCR(double l, double r) {
+        crLeft.setPower(l);
+        crRight.setPower(r);
+    }
+
+    private void setShooterRPM(double rpm) {
+        shooter.setVelocity((rpm * TICKS_PER_REV) / 60.0);
+    }
+
+    private double getShooterRPM() {
+        return shooter.getVelocity() * 60.0 / TICKS_PER_REV;
+    }
+
+    private boolean shooterAtSpeed() {
+        return Math.abs(getShooterRPM() - RPM) < RPM_TOL;
+    }
+}
